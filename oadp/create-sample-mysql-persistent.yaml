@@ -1,0 +1,136 @@
+# https://developers.redhat.com/blog/2020/10/22/persistent-storage-in-action-understanding-red-hat-openshifts-persistent-volume-framework#step_1__set_up_the_demo
+
+# STEP 1 - setup
+oc new-project pvc-demo
+oc get is -n openshift | grep mysql
+oc get -o yaml is/mysql -n openshift
+oc new-app -i mysql -e MYSQL_USER=tester -e MYSQL_PASSWORD=Pass1234 -e MYSQL_DATABASE=testdb
+oc get all
+
+# STEP 2: Create the mysql data with ephemeral storage
+podname=$(oc get pods | grep -v NAME | awk '{print $1}')
+oc rsh pod/$podname
+printenv |grep MYSQL
+cat <<EOF > sample_query.sql
+USE testdb;
+CREATE TABLE videogames (name VARCHAR(100), category VARCHAR(100));
+INSERT INTO videogames (name, category) VALUES ("MineCraft", "Puzzle");
+INSERT INTO videogames (name, category) VALUES ("Angry Bird", "Action");
+EOF
+
+mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$HOSTNAME $MYSQL_DATABASE
+source sample_query.sql
+SELECT * FROM videogames;
+exit # from mysql
+exit # from rsh
+
+# Delete the pod - a new pod will get started and it will not contain the data created above
+oc delete pod/$podname
+oc get pods -w
+
+
+podname=$(oc get pods | grep -v NAME | awk '{print $1}')
+oc rsh pod/$podname
+mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$HOSTNAME $MYSQL_DATABASE
+show databases;
+use testdb;
+show tables; # should be empty
+ 
+# STEP 3: Create a MySQL application with persistent volume storage
+cat << EOF > sample_pvc.yaml
+apiVersion: "v1"
+kind: "PersistentVolumeClaim"
+metadata:
+  name: "mysql-claim"
+spec:
+  accessModes:
+    - "ReadWriteOnce"
+  resources:
+    requests:
+      storage: "1Gi"
+EOF
+oc apply -f sample_pvc.yaml
+# shows pending on my crc, but describe says it's waiting for first consumer, and when I did the following steps, it changed to bound.
+
+# create a secret instead of using plain text
+cat << EOF > mysql-cred.env
+MYSQL_USER=tester
+MYSQL_PASSWORD=Pass1234
+MYSQL_DATABASE=testdb
+EOF
+oc create secret generic mysql-sec --from-env-file=mysql-cred.env
+oc get -o yaml secret/mysql-sec
+
+# Modify the deployment
+oc edit deploy/mysql
+# change to 
+spec:
+  containers:
+  - env:
+    - name: MYSQL_DATABASE
+      valueFrom:
+        secretKeyRef:
+          key: MYSQL_DATABASE
+          name: mysql-sec
+    - name: MYSQL_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          key: MYSQL_PASSWORD
+          name: mysql-sec
+    - name: MYSQL_USER
+      valueFrom:
+        secretKeyRef:
+          key: MYSQL_USER
+          name: mysql-sec
+
+# better for previous step - add the patch command
+
+# Implement the persistent volume claim
+First, under spec.template.spec.containers, add a new line after terminationGracePeriodSeconds. Enter volumes: and a reference to the persistent volume claim, for instance mysql-volume.
+Next, introduce a new line after terminationMessagePolicy. Enter volumeMounts: and add a mountPath with the value set to /var/lib/mysql. Enter mysql-volume, which is the volume name that you created in the previous step.
+
+oc edit deploy/mysql
+# Under terminationMessagePolicy: File
+volumeMounts:
+- mountPath: "/var/lib/mysql"
+  name: "mysql-volume"
+# Under terminationGracePeriodSeconds: 30
+volumes:
+- name: "mysql-volume"
+  persistentVolumeClaim:
+    claimName: "mysql-claim"
+
+oc get pods -w
+
+# Test the pod
+podname=$(oc get pods | grep -v NAME | awk '{print $1}')
+oc rsh pod/$podname
+printenv |grep MYSQL
+cat <<EOF > sample_query.sql
+USE testdb;
+CREATE TABLE videogames (name VARCHAR(100), category VARCHAR(100));
+INSERT INTO videogames (name, category) VALUES ("MineCraft", "Puzzle");
+INSERT INTO videogames (name, category) VALUES ("Angry Bird", "Action");
+EOF
+
+mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$HOSTNAME $MYSQL_DATABASE
+source sample_query.sql
+SELECT * FROM videogames;
+exit # from mysql
+exit # from rsh
+
+# Delete the pod - a new pod will get started and it will not contain the data created above
+oc delete pod/$podname
+oc get pods -w
+
+podname=$(oc get pods | grep -v NAME | awk '{print $1}')
+oc rsh pod/$podname
+mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$HOSTNAME $MYSQL_DATABASE
+show databases;
+use testdb;
+show tables; # should now include videogames
+select * from videogames; # should show rows inserted above
+
+# FYI the pvc should now be bound
+
+
