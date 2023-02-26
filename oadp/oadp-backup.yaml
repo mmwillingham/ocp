@@ -1,11 +1,17 @@
 # https://docs.openshift.com/container-platform/4.12/backup_and_restore/application_backup_and_restore/installing/installing-oadp-aws.html
 # Identify AWS access key and secret
 # I'm using the one for martin.willingham@gmail.com
+
 # Get aws client
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+aws configure (will prompt for AWS credentials, region, default output)
+
 #
 # Install OADP Operator
 # 
-BUCKET=oadp-backup
+BUCKET=oadp-backup-dr
 REGION=us-east-2
 aws s3api create-bucket \
     --bucket $BUCKET \
@@ -13,7 +19,7 @@ aws s3api create-bucket \
     --create-bucket-configuration LocationConstraint=$REGION
 aws iam create-user --user-name velero
 
-$ cat > velero-policy.json <<EOF
+cat > velero-policy.json <<EOF
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -71,59 +77,18 @@ aws_access_key_id=<AWS_ACCESS_KEY_ID>
 aws_secret_access_key=<AWS_SECRET_ACCESS_KEY>
 EOF
 
-
 oc create secret generic cloud-credentials -n openshift-adp --from-file cloud=credentials-velero
 
 # Configuring the Data Protection Application
 
-# Edit the values in the spec.configuration.velero.podConfig.ResourceAllocations block of the DataProtectionApplication CR manifest, as in the following example:
-# Specify the node selector to be supplied to Velero podSpec
-
-apiVersion: oadp.openshift.io/v1alpha1
-kind: DataProtectionApplication
-metadata:
-  name: <dpa_sample>
-spec:
-...
-  configuration:
-    velero:
-      podConfig:
-        nodeSelector: <node selector>
-        resourceAllocations:
-          limits:
-            cpu: "1"
-            memory: 512Mi
-          requests:
-            cpu: 500m
-            memory: 256Mi
-
-# Edit the spec.backupLocations.velero.objectStorage.caCert parameter and spec.backupLocations.velero.config parameters of the DataProtectionApplication CR manifest:
-apiVersion: oadp.openshift.io/v1alpha1
-kind: DataProtectionApplication
-metadata:
-  name: <dpa_sample>
-spec:
-...
-  backupLocations:
-    - name: default
-      velero:
-        provider: aws
-        default: true
-        objectStorage:
-          bucket: <bucket>
-          prefix: <prefix>
-          caCert: <base64_encoded_cert_string> 
-        config:
-          insecureSkipTLSVerify: "false" 
-...
-
 # Installing the Data Protection Application
-# Install Operator: DataProtectionApplication
-# Update like this
+Installed Operators > OADP Operator > DataProtectionApplication > Create Instance
+Input the yaml below with edits as appropriate
+
 apiVersion: oadp.openshift.io/v1alpha1
 kind: DataProtectionApplication
 metadata:
-  name: <dpa_sample>
+  name: dpa-mmw-test
   namespace: openshift-adp
 spec:
   configuration:
@@ -134,7 +99,11 @@ spec:
     restic:
       enable: true 
       podConfig:
-        nodeSelector: <node selector> 
+        nodeSelector: <node selector>
+#        I specified 
+#        nodeSelector:
+#          kubernetes.io/hostname: crc-rwwzd-master-0
+
   backupLocations:
     - name: default
       velero:
@@ -156,6 +125,7 @@ spec:
         config:
           region: <region> 
           profile: "default"
+          
 # The openshift plugin is mandatory.
 # Set to false if you want to disable the Restic installation. Restic deploys a daemon set, which means that each worker node has Restic pods running. You configure Restic for backups by adding spec.defaultVolumesToRestic: true to the Backup CR.
 # Specify the node selector to be supplied to Restic podSpec.
@@ -164,8 +134,29 @@ spec:
 # Specify the name of the Secret object that you created. If you do not specify this value, the default name, cloud-credentials, is used. If you specify a custom name, the custom name is used for the backup location.
 # You do not need to specify a snapshot location if you use CSI snapshots or Restic to back up PVs.
 # The snapshot location must be in the same region as the PVs.
+# Specify the node selector to be supplied to Velero podSpec
 
 oc get all -n openshift-adp
+
+# Edit the values in the spec.configuration.velero.podConfig.ResourceAllocations block of the DataProtectionApplication CR manifest, as in the following example:
+# I didn't do this:
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: <dpa_sample>
+spec:
+...
+  configuration:
+    velero:
+      podConfig:
+        nodeSelector: <node selector>
+        resourceAllocations:
+          limits:
+            cpu: "1"
+            memory: 512Mi
+          requests:
+            cpu: 500m
+            memory: 256Mi
 
 # Enabling CSI in the DataProtectionApplication CR
 # You enable the Container Storage Interface (CSI) in the DataProtectionApplication custom resource (CR) in order to back up persistent volumes with CSI snapshots.
