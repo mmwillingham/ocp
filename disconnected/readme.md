@@ -42,7 +42,7 @@ done
 2. Bastion Filesystem & Workspace Preparation (Run on Bastion)
 ==============================================================================
 
-# Identify disk and partition layout, then expand filesystem
+# Expand Filesystem
 export ROOT_DISK=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /))
 export ROOT_PART_NUM=$(lsblk -no KNAME $(findmnt -n -o SOURCE /) | grep -o '[0-9]*$')
 
@@ -224,7 +224,6 @@ oc-mirror --v2 \
   --authfile ~/.open-shift/containers-auth.json \
   --workspace "file://${WORKSPACE}"
 
-
 ==============================================================================
 5. Prepare & Apply Cluster Resources (Run on Bastion)
 ==============================================================================
@@ -232,65 +231,102 @@ oc-mirror --v2 \
 RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
 echo "Found cluster resources at: ${RESOURCE_DIR}"
 
-# Safely inject mirrorSourcePolicy: NeverContactSource into IDMS and ITMS
+# 1. Cleanly inject mirrorSourcePolicy: NeverContactSource directly above "source:"
 python3 -c '
 import glob
 
-for filepath in glob.glob("'$RESOURCE_DIR'/*.yaml"):
-    if "idms" in filepath or "itms" in filepath:
-        with open(filepath, "r") as f:
-            lines = f.readlines()
+def apply_never_contact(filepath):
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+    
+    clean = [l for l in lines if "mirrorSourcePolicy" not in l]
+    final = []
+    for line in clean:
+        if line.strip().startswith("source:"):
+            indent = line[:len(line) - len(line.lstrip())]
+            final.append(f"{indent}mirrorSourcePolicy: NeverContactSource\n")
+        final.append(line)
         
-        new_lines = []
-        for line in lines:
-            if "mirrorSourcePolicy:" in line:
-                continue
-            new_lines.append(line)
-            if "- mirrors:" in line:
-                indent = line.split("-")[0] + "  "
-                new_lines.append(f"{indent}mirrorSourcePolicy: NeverContactSource\n")
-                
-        with open(filepath, "w") as f:
-            f.writelines(new_lines)
+    with open(filepath, "w") as f:
+        f.writelines(final)
+
+resource_dir="'$RESOURCE_DIR'"
+for f in glob.glob(f"{resource_dir}/idms*.yaml") + glob.glob(f"{resource_dir}/itms*.yaml"):
+    apply_never_contact(f)
 '
 
-# Resolve Bastion IP reachable by nodes
+# 2. Replace localhost:5002 with BASTION_HOST:5002
 BASTION_HOST=$(curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
   || ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' \
   || hostname -I | awk '{print $1}')
 
 echo "Using Bastion Host IP: ${BASTION_HOST}"
 
-# Replace localhost:5002 with BASTION_HOST:5002 across all manifests
 sed -i "s/localhost:5002/${BASTION_HOST}:5002/g" "${RESOURCE_DIR}"/*.yaml
 sed -i "s/localhost:5002/${BASTION_HOST}:5002/g" "${RESOURCE_DIR}"/*.json 2>/dev/null || true
 
-# Apply IDMS, ITMS, and Signature ConfigMap
+# 3. Multi-Document Safe Sanity Check
+python3 -c '
+import os, glob, yaml, json
+
+resource_dir = "'$RESOURCE_DIR'"
+print("🔍 RUNNING STRICT SANITY CHECK ON MANIFESTS...\n")
+
+errors = False
+for f in glob.glob(f"{resource_dir}/*.yaml") + glob.glob(f"{resource_dir}/*.json"):
+    fname = os.path.basename(f)
+    try:
+        with open(f) as fp:
+            docs = list(yaml.safe_load_all(fp)) if f.endswith(".yaml") else [json.load(fp)]
+        
+        if any("localhost" in str(doc) for doc in docs if doc):
+            print(f"❌ FAIL: {fname} contains un-replaced localhost endpoint!")
+            errors = True
+        else:
+            print(f"✅ PASS: {fname} ({len(docs)} doc(s))")
+    except Exception as e:
+        print(f"❌ FAIL: {fname} parsing error: {e}")
+        errors = True
+
+if errors:
+    raise SystemExit("🛑 Fix manifest errors before continuing.")
+'
+
+# 4. Apply IDMS, ITMS, Signatures
 oc apply -f "${RESOURCE_DIR}/idms-oc-mirror.yaml"
 oc apply -f "${RESOURCE_DIR}/itms-oc-mirror.yaml"
-oc apply -f "${RESOURCE_DIR}/signature-configmap.yaml"
+oc apply -f "${RESOURCE_DIR}"/signature-configmap.*
 
-# Wait for MachineConfigPools update
-echo "Waiting for MachineConfigPools to complete updates..."
-until oc get mcp -o jsonpath='{range .items[*]}{.metadata.name}{"\tUPDATED="}{.status.conditions[?(@.type=="Updated")].status}{"\tUPDATING="}{.status.conditions[?(@.type=="Updating")].status}{"\n"}{end}' | grep -qv "UPDATED=False"; do
-  echo "[$(date +'%H:%M:%S')] MachineConfigPools are updating..."
-  sleep 15
+# 5. BLOCKING WAIT: MachineConfigPool Node Updates
+echo "⏳ Waiting for MachineConfigPools to begin and complete updates..."
+sleep 10
+
+until [ "$(oc get mcp -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Updating")].status}{"\n"}{end}' | grep -c "True")" -eq 0 ] && \
+      [ "$(oc get mcp -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Updated")].status}{"\n"}{end}' | grep -v "True" | wc -l)" -eq 0 ]; do
+  echo "[$(date +'%H:%M:%S')] Nodes applying registry configuration updates..."
+  sleep 20
 done
-echo "All MachineConfigPools are fully updated."
+echo "✅ ALL NODES & MACHINECONFIGPOOLS ARE FULLY UPDATED AND READY!"
 
-# Apply CatalogSources
+# 6. Apply CatalogSources & BLOCK for OLM Ready State
 oc apply -f "${RESOURCE_DIR}"/cs-*.yaml
 oc apply -f "${RESOURCE_DIR}"/cc-*.yaml 2>/dev/null || true
 
-# Verify CatalogSource State
-oc get catalogsource cs-redhat-operator-index-v4-20 -n openshift-marketplace
+echo "⏳ Waiting for CatalogSource to reach READY state..."
+until [ "$(oc get catalogsource cs-redhat-operator-index-v4-20 -n openshift-marketplace -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)" = "READY" ]; do
+  echo "[$(date +'%H:%M:%S')] CatalogSource status: $(oc get catalogsource cs-redhat-operator-index-v4-20 -n openshift-marketplace -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo 'Pending')"
+  sleep 10
+done
+echo "✅ CATALOGSOURCE IS READY AND CONNECTED!"
 
 
 ==============================================================================
 6. Install OpenShift Update Service (OSUS) & Patch CVO
 ==============================================================================
 
-# Create Namespace & Subscription for Operator
+NS="openshift-update-service"
+
+# 1. Create OSUS Namespace and Subscription
 cat << 'EOF' | oc apply -f -
 apiVersion: v1
 kind: Namespace
@@ -320,14 +356,15 @@ spec:
   sourceNamespace: openshift-marketplace
 EOF
 
-# Wait for Operator CSV
-until oc get csv -n openshift-update-service | grep -E -i "update-service|cincinnati" | grep -i succeeded >/dev/null 2>&1; do
-  echo "Waiting for OSUS operator installation..."
-  sleep 5
+# 2. BLOCKING WAIT: Cincinnati Operator CSV Installation
+echo "⏳ Waiting for Cincinnati Operator installation..."
+until oc get csv -n "${NS}" 2>/dev/null | grep -E -i "update-service|cincinnati" | grep -i "Succeeded" >/dev/null 2>&1; do
+  echo "[$(date +'%H:%M:%S')] Operator installation in progress..."
+  sleep 10
 done
-echo "OSUS Operator installed successfully."
+echo "✅ CINCINNATI OPERATOR INSTALLED SUCCESSFULLY!"
 
-# Configure Global Registry CA Trust for OSUS
+# 3. Configure CA Trust for Nexus Registry
 BASTION_HOST=$(curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
   || ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' \
   || hostname -I | awk '{print $1}')
@@ -342,20 +379,36 @@ oc create configmap registry-cas -n openshift-config \
 oc patch image.config.openshift.io/cluster --type=merge \
   -p '{"spec":{"additionalTrustedCA":{"name":"registry-cas"}}}'
 
-# Apply Auto-Generated UpdateService Manifest
+# 4. Clean old broken CRs & Apply UpdateService Manifest explicitly to openshift-update-service
+oc delete updateservice update-service -n default --ignore-not-found
+oc delete updateservice update-service -n "${NS}" --ignore-not-found
+
 RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
-oc apply -f "${RESOURCE_DIR}/updateService.yaml"
+oc apply -f "${RESOURCE_DIR}/updateService.yaml" -n "${NS}"
 
-# Wait for Deployment
-echo "Waiting for UpdateService rollout..."
-oc rollout status deployment/update-service-oc-mirror -n openshift-update-service --timeout=120s
+# 5. BLOCKING WAIT: Operator Reconciliation & Pod Rollout
+echo "⏳ Waiting for operator to reconcile and create deployment object..."
+until oc get deployment update-service-oc-mirror -n "${NS}" >/dev/null 2>&1; do
+  echo "[$(date +'%H:%M:%S')] Operator reconciling... waiting for deployment object..."
+  sleep 5
+done
 
-# Fetch Policy Engine Route & Patch CVO Upstream
-POLICY_ENGINE_URL=$(oc get route -n openshift-update-service -l app=update-service-oc-mirror -o jsonpath='{.items[0].spec.host}')
+echo "⏳ Deployment object created! Tracking pod rollout..."
+oc rollout status deployment/update-service-oc-mirror -n "${NS}" --timeout=300s
+echo "✅ UPDATE SERVICE DEPLOYMENT IS 100% READY!"
+
+# 6. Fetch Policy Engine Route & Patch Cluster Version Operator
+POLICY_ENGINE_URL=$(oc get route -n "${NS}" -l app=update-service-oc-mirror -o jsonpath='{.items[0].spec.host}')
+
+echo "Patching CVO with Upstream URL: https://${POLICY_ENGINE_URL}/api/upgrades_info/v1/graph"
 
 oc patch clusterversion version --type=json \
   -p '[{"op": "add", "path": "/spec/upstream", "value": "https://'$POLICY_ENGINE_URL'/api/upgrades_info/v1/graph"}]'
 
-# Verify Endpoint
-oc get clusterversion -o jsonpath='{.items[*].spec.upstream}' ; echo ""
-oc get clusterversion
+# 7. Final Verification
+echo -e "\n=================================================="
+echo "🎯 FINAL VERIFICATION"
+echo "=================================================="
+echo "CVO Upstream URL: $(oc get clusterversion -o jsonpath='{.items[*].spec.upstream}')"
+echo -e "\nPod Status in ${NS}:"
+oc get pods -n "${NS}"
