@@ -412,3 +412,113 @@ echo "=================================================="
 echo "CVO Upstream URL: $(oc get clusterversion -o jsonpath='{.items[*].spec.upstream}')"
 echo -e "\nPod Status in ${NS}:"
 oc get pods -n "${NS}"
+
+# 8. OSUS usage in Web Console 
+#### OpenShift Update Service (OSUS) - Web Console Usage Guide
+
+Once the OpenShift Update Service (OSUS) is deployed and the Cluster Version Operator (CVO) is patched with your local upstream route, OpenShift automatically integrates your mirrored graph directly into the Web Console UI[cite: 1, 2]. 
+
+Follow these steps to manage and trigger cluster upgrades using the Web Console in a disconnected environment.
+
+---
+
+## 1. Accessing Cluster Update Settings
+
+1. Log in to the OpenShift Web Console as a user with `cluster-admin` privileges.
+2. In the left navigation menu, navigate to **Administration** $\rightarrow$ **Cluster Settings**.
+3. Select the **Details** tab.
+
+---
+
+## 2. Verifying the Disconnected OSUS Graph
+
+On the **Details** tab, verify that CVO is correctly pulling from your local Nexus/OSUS instance:
+
+* **Upstream Graph Route:** Locate the **Update status** section. CVO will display available releases pulled from your local route URL (`https://update-service-oc-mirror-route-openshift-update-service.../api/upgrades_info/v1/graph`)[cite: 1, 2].
+* **Channel Selection:** Click the current channel link (e.g., `stable-4.20`)[cite: 1, 2]. You will see a dropdown list containing all channels configured in your mirrored `ImageSetConfiguration` (e.g., `fast-4.20`, `eus-4.20`, `stable-4.21`, etc.)[cite: 1, 2].
+
+---
+
+## 3. Triggering a Cluster Upgrade
+
+1. Under the **Update status** section, click **Select version** (or **Update**)[cite: 1].
+2. Choose your target release version (e.g., `4.20.31` or `4.20.32`) from the list provided by your local graph[cite: 1].
+3. Review the update details and click **Update** to begin the cluster rollout process.
+
+---
+
+## 4. Monitoring Upgrade Progress
+
+You can track the live progress of the upgrade directly within the console:
+
+* **Visual Status Map:** On **Administration** $\rightarrow$ **Cluster Settings** $\rightarrow$ **Details**, the console renders a live visual timeline tracking control plane nodes and worker MachineConfigPool updates.
+* **Operator Reconciliation:** Navigate to the **ClusterOperators** tab to watch individual core operators update and return to an `Available=True` / `Degraded=False` state.
+
+---
+
+## 5. Handling Admin Acknowledgments in the UI
+
+If an upgrade path requires explicit administrator acknowledgment (such as the Sigstore signature notice when transitioning toward 4.21)[cite: 1]:
+
+1. A yellow warning banner will automatically appear at the top of the **Cluster Settings** page[cite: 1].
+2. Click the **Acknowledge** button directly within the banner to clear the safeguard without using the CLI[cite: 1].
+
+# TESTING
+==============================================================================
+9. Simulate Air-Gapped Cluster Environment (Run on Bastion)
+==============================================================================
+
+To simulate a strict, zero-egress air-gapped environment where the OpenShift cluster has zero internet access for upgrades while keeping full internet connectivity on the Bastion host, execute the following configuration steps:
+
+### Step 1: DNS Blackholing inside OpenShift Cluster
+
+Apply a CoreDNS override to force cluster nodes to resolve public Red Hat and Quay container registries to loopback (`127.0.0.1`):
+
+```bash
+oc patch dns.operator.openshift.io/default --type=merge -p '{
+  "spec": {
+    "zones": [
+      {
+        "name": "registry.redhat.io",
+        "hosts": [{"ip": "127.0.0.1"}]
+      },
+      {
+        "name": "quay.io",
+        "hosts": [{"ip": "127.0.0.1"}]
+      },
+      {
+        "name": "cdn.redhat.com",
+        "hosts": [{"ip": "127.0.0.1"}]
+      },
+      {
+        "name": "api.openshift.com",
+        "hosts": [{"ip": "127.0.0.1"}]
+      }
+    ]
+  }
+}'
+```
+
+### Step 2: Sever Nexus Proxy Feed (Block Port 5001)
+#### Block incoming traffic to port 5001 (redhat-proxy) on the local firewall to prevent OpenShift from pulling "on-demand" fallback artifacts through the proxy repository:
+```
+# Block local traffic to port 5001 (Proxy Port)
+sudo iptables -I INPUT 1 -p tcp --dport 5001 -j DROP
+```
+
+### Step 3: Verify Air-Gap Simulation & OSUS Functionality
+#### Run these checks to confirm that the Bastion retains internet access, the cluster is strictly isolated, and upgrades function purely via the local OSUS graph and hosted registry (5002):
+```
+# 1. TEST BASTION INTERNET: Should succeed
+echo "🌐 Testing Bastion Internet Access..."
+curl -s -I [https://www.redhat.com](https://www.redhat.com) | head -n 1
+
+# 2. TEST CLUSTER AIR-GAP ISOLATION: Should fail/timeout connecting to public registry
+echo "🔒 Testing Cluster Air-Gap Isolation..."
+oc debug node/$(oc get nodes -o jsonpath='{.items[0].metadata.name}') -- chroot /host curl -s -I --connect-timeout 3 [https://registry.redhat.io/v2/](https://registry.redhat.io/v2/) || echo "✅ SUCCESS: Cluster is fully air-gapped!"
+
+# 3. TEST OSUS UPGRADE PATH: Should resolve target releases from port 5002
+echo "🚀 Checking OSUS Upgrade Status..."
+oc adm upgrade
+```
+
