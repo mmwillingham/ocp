@@ -429,6 +429,38 @@ oc-mirror --v2 \
   --authfile ~/.open-shift/containers-auth.json \
   --workspace "file://${WORKSPACE}"
 ```
+```
+# If mirroring signature errors on certified operators:
+sudo mkdir -p /etc/containers/
+
+cat << 'EOF' | sudo tee /etc/containers/policy.json
+{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "transports": {
+        "docker": {
+            "registry.connect.redhat.com": [
+                {
+                    "type": "insecureAcceptAnything"
+                }
+            ]
+        }
+    }
+}
+EOF
+```
+```
+# Rerun mirror command
+oc-mirror --v2 \
+  --config "${WORKSPACE}/imageset-config.yaml" \
+  docker://localhost:5002 \
+  --authfile ~/.open-shift/containers-auth.json \
+  --workspace "file://${WORKSPACE}"
+```
+
 
 Prepare & Apply Cluster Resources (Run on Bastion)
 ```
