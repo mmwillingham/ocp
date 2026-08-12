@@ -115,20 +115,30 @@ echo "Nexus URL: http://${BASTION_IP}:8081"
 ```
 
 ```
-# ----------------------------------------------------------------------------
-# Nexus UI Steps (In Browser):
-# 1. Open http://<BASTION_IP>:8081 -> Login as admin with password printed above.
-# 2. Change admin password to: RedHat123!
-# 3. Security -> Anonymous Access -> Check "Allow anonymous users..." -> Save.
-# 4. Security -> Realms -> Move "Docker Bearer Token Realm" to Active -> Save.
-# 5. Create Proxy Repository "redhat-proxy":
-#    - Format: docker (proxy) | Port: 5001 (HTTPS) | Allow anonymous pull: Checked
-#    - Remote storage: https://registry.redhat.io
-#    - Authentication: Red Hat Service Account (e.g. 15328052|nexus-lab & token)
-# 6. Create Hosted Repository "ocp-hosted":
-#    - Format: docker (hosted) | Port: 5002 (HTTPS) | Allow anonymous pull: Checked
-#    - Deployment policy: Allow redeploy
-# ----------------------------------------------------------------------------
+Nexus UI Steps (In Browser):
+Open http://<BASTION_IP>:8081 -> Login as admin with password printed above.
+Change admin password to: RedHat123!
+Login again
+Refresh browser to bring up wizard and agree to EULA
+Settings > Security > Anonymous Access > Check "Allow anonymous users..." > Save
+Settings > Security -> Realms > Move "Docker Bearer Token Realm" to Active > Save
+Settings > Repository > Create Repository
+   Format: docker (proxy)
+   Name: redhat-proxy
+   Other Connectors > HTTPS > 5001
+   Allow anonymous pull: Checked
+   Remote storage: https://registry.redhat.io
+    Authentication: Red Hat Service Account (e.g. 15328052|nexus-lab & token)
+     Get token here: https://access.redhat.com/terms-based-registry/
+  Create Repository
+Settings > Repository > Create Repository
+Create Hosted Repository
+  Format: docker (hosted)
+  Name: ocp-hosted
+  Other Connectors > HTTPS > 5002
+  Allow anonymous pull: Checked
+  Deployment policy: Allow redeploy
+  Create Repository
 ```
 
 ```
@@ -201,11 +211,171 @@ sudo chmod +x /usr/local/bin/oc-mirror
 
 WORKSPACE="${HOME}/oc-mirror-workspace"
 mkdir -p "${WORKSPACE}"
+oc-mirror version
 ```
 ```
 # Write ImageSetConfiguration
 cat << 'EOF' > "${WORKSPACE}/imageset-config.yaml"
+kind: ImageSetConfiguration
 apiVersion: mirror.openshift.io/v2alpha1
+mirror:
+  platform:
+    channels:
+    - name: stable-4.20
+      minVersion: 4.20.26
+      maxVersion: 4.20.26
+    graph: true
+  operators:
+    - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.20
+      packages:
+        - name: advanced-cluster-management
+          defaultChannel: release-2.17
+          channels:
+            - name: release-2.17
+              minVersion: '2.17.0'
+              maxVersion: '2.17.0'
+        - name: cincinnati-operator
+          defaultChannel: v1
+          channels:
+            - name: v1
+              minVersion: '5.0.3'
+              maxVersion: '5.0.3'
+        - name: cluster-kube-descheduler-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '5.3.2'
+              maxVersion: '5.3.2'
+        - name: cluster-logging
+          defaultChannel: stable-6.6
+          channels:
+            - name: stable-6.6
+              minVersion: '6.6.0'
+              maxVersion: '6.6.0'
+        - name: cluster-observability-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.5.1'
+              maxVersion: '1.5.1'
+        - name: compliance-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.9.1'
+              maxVersion: '1.9.1'
+        - name: fence-agents-remediation
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '0.6.1'
+              maxVersion: '0.6.1'
+        - name: file-integrity-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.4.0'
+              maxVersion: '1.4.0'
+        - name: kubernetes-nmstate-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '4.20.0-202608050632'
+              maxVersion: '4.20.0-202608050632'
+        - name: kubevirt-hyperconverged
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '4.20.24'
+              maxVersion: '4.20.24'
+        - name: loki-operator
+          defaultChannel: stable-6.6
+          channels:
+            - name: stable-6.6
+              minVersion: '6.6.0'
+              maxVersion: '6.6.0'
+        - name: metallb-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '4.20.0-202608040713'
+              maxVersion: '4.20.0-202608040713'
+        - name: mtv-operator
+          defaultChannel: release-v2.12
+          channels:
+            - name: release-v2.12
+              minVersion: '2.12.5'
+              maxVersion: '2.12.5'
+        - name: netobserv-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.12.1'
+              maxVersion: '1.12.1'
+        - name: nfd
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '4.20.0-202608040713'
+              maxVersion: '4.20.0-202608040713'
+        - name: node-healthcheck-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '0.10.3'
+              maxVersion: '0.10.3'
+        - name: node-maintenance-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '5.5.0'
+              maxVersion: '5.5.0'
+        - name: node-observability-operator
+          defaultChannel: alpha
+          channels:
+            - name: alpha
+              minVersion: '0.2.0'
+              maxVersion: '0.2.0'
+        - name: numaresources-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '4.20.3'
+              maxVersion: '4.20.3'
+        - name: openshift-gitops-operator
+          defaultChannel: latest
+          channels:
+            - name: latest
+              minVersion: '1.21.2'
+              maxVersion: '1.21.2'
+        - name: redhat-oadp-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.5.7'
+              maxVersion: '1.5.7'
+    - catalog: registry.redhat.io/redhat/certified-operator-index:v4.20
+      packages:
+        - name: dynatrace-operator
+          defaultChannel: alpha
+          channels:
+            - name: alpha
+              minVersion: '1.10.2'
+              maxVersion: '1.10.2'
+        - name: infinibox-operator-certified
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '2.29.0'
+              maxVersion: '2.29.0'
+        - name: vault-secrets-operator
+          defaultChannel: stable
+          channels:
+            - name: stable
+              minVersion: '1.5.0'
+              maxVersion: '1.5.0'
+  additionalImages: []
+<!-- apiVersion: mirror.openshift.io/v2alpha1
 kind: ImageSetConfiguration
 mirror:
   platform:
@@ -225,7 +395,7 @@ mirror:
             - name: v1
         - name: advanced-cluster-management
         - name: kubevirt-hyperconverged
-        - name: openshift-gitops-operator
+        - name: openshift-gitops-operator -->
 EOF
 ```
 ```
