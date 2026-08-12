@@ -409,8 +409,17 @@ NEXUS_PASS="RedHat123!"
 NEXUS_AUTH=$(echo -n "${NEXUS_USER}:${NEXUS_PASS}" | tr -d '\r\n' | base64 | tr -d '\r\n')
 ```
 ```
+# Populate pull-secret
+## Get from here: https://console.redhat.com/openshift/install/pull-secret
+## vi ~/pull-secret.json
+## (populate contents)
+
+# Create combined auth file
 mkdir -p ~/.open-shift
 jq --arg auth "$NEXUS_AUTH" '.auths["localhost:5002"] = {"auth": $auth}' ~/pull-secret.json > ~/.open-shift/containers-auth.json
+
+# Verify it looks ok
+cat ~/.open-shift/containers-auth.json
 ```
 ```
 # Run Mirroring Process
