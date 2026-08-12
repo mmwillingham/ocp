@@ -430,35 +430,16 @@ oc-mirror --v2 \
   --workspace "file://${WORKSPACE}"
 ```
 ```
-# If mirroring signature errors on certified operators:
-sudo mkdir -p /etc/containers/
-
-cat << 'EOF' | sudo tee /etc/containers/policy.json
-{
-    "default": [
-        {
-            "type": "insecureAcceptAnything"
-        }
-    ],
-    "transports": {
-        "docker": {
-            "registry.connect.redhat.com": [
-                {
-                    "type": "insecureAcceptAnything"
-                }
-            ]
-        }
-    }
-}
-EOF
+# If mirroring signature errors on certified operators, you may need to remove-signatures:
 ```
 ```
-# Rerun mirror command
+# Rerun mirror command with remove-signatures
 oc-mirror --v2 \
   --config "${WORKSPACE}/imageset-config.yaml" \
   docker://localhost:5002 \
   --authfile ~/.open-shift/containers-auth.json \
-  --workspace "file://${WORKSPACE}"
+  --workspace "file://${WORKSPACE}" \
+  --remove-signatures
 ```
 
 
