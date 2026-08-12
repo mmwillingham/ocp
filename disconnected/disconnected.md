@@ -48,12 +48,10 @@ done
 ```
 
 
-==============================================================================
 Bastion Filesystem & Workspace Preparation (Run on Bastion)
-==============================================================================
 
-# Expand Filesystem
 ```
+# Expand Filesystem
 export ROOT_DISK=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /))
 export ROOT_PART_NUM=$(lsblk -no KNAME $(findmnt -n -o SOURCE /) | grep -o '[0-9]*$')
 
@@ -72,19 +70,16 @@ sudo rm -rf /var/nexus-data /etc/nexus-ssl /etc/nginx
 sudo podman system prune -a --volumes --force
 ```
 
-
-==============================================================================
-3. Install & Configure Nexus Registry (Run on Bastion)
-==============================================================================
+Install & Configure Nexus Registry (Run on Bastion)
 ```
 # Create SSL & Storage Directories
 sudo mkdir -p /var/nexus-data /etc/nexus-ssl /etc/nginx
 sudo chown -R 200:200 /var/nexus-data /etc/nexus-ssl
 ```
-
+```
 # Get Public IP
-```export BASTION_IP=$(curl -s https://ifconfig.me || hostname -I | awk '{print $1}')```
-
+export BASTION_IP=$(curl -s https://ifconfig.me || hostname -I | awk '{print $1}')
+```
 ```
 # Generate Self-Signed Certificate
 sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -196,9 +191,8 @@ curl -I https://localhost:5001/v2/
 curl -I https://localhost:5002/v2/
 ```
 
-==============================================================================
-4. Install oc-mirror v2 & Mirror Content (Run on Bastion)
-==============================================================================
+Install oc-mirror v2 & Mirror Content (Run on Bastion)
+
 ```
 # Install oc-mirror CLI
 curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/oc-mirror.tar.gz | tar -xz -C /tmp
@@ -256,9 +250,8 @@ oc-mirror --v2 \
   --authfile ~/.open-shift/containers-auth.json \
   --workspace "file://${WORKSPACE}"
 ```
-==============================================================================
-5. Prepare & Apply Cluster Resources (Run on Bastion)
-==============================================================================
+
+Prepare & Apply Cluster Resources (Run on Bastion)
 ```
 RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
 echo "Found cluster resources at: ${RESOURCE_DIR}"
@@ -359,9 +352,7 @@ done
 echo "✅ CATALOGSOURCE IS READY AND CONNECTED!"
 ```
 
-==============================================================================
-6. Install OpenShift Update Service (OSUS) & Patch CVO
-==============================================================================
+Install OpenShift Update Service (OSUS) & Patch CVO
 ```
 NS="openshift-update-service"
 ```
