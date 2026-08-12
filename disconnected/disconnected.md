@@ -375,27 +375,27 @@ mirror:
               minVersion: '1.5.0'
               maxVersion: '1.5.0'
   additionalImages: []
-<!-- apiVersion: mirror.openshift.io/v2alpha1
-kind: ImageSetConfiguration
-mirror:
-  platform:
-    architectures:
-      - amd64
-    channels:
-      - name: stable-4.20
-        minVersion: 4.20.30
-        maxVersion: 4.20.32
-        type: ocp
-    graph: true
-  operators:
-    - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.20
-      packages:
-        - name: cincinnati-operator
-          channels:
-            - name: v1
-        - name: advanced-cluster-management
-        - name: kubevirt-hyperconverged
-        - name: openshift-gitops-operator -->
+# apiVersion: mirror.openshift.io/v2alpha1
+# kind: ImageSetConfiguration
+# mirror:
+#   platform:
+#     architectures:
+#       - amd64
+#     channels:
+#       - name: stable-4.20
+#         minVersion: 4.20.30
+#         maxVersion: 4.20.32
+#         type: ocp
+#     graph: true
+#   operators:
+#     - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.20
+#       packages:
+#         - name: cincinnati-operator
+#           channels:
+#             - name: v1
+#         - name: advanced-cluster-management
+#         - name: kubevirt-hyperconverged
+#         - name: openshift-gitops-operator
 EOF
 ```
 ```
