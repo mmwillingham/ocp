@@ -1,8 +1,7 @@
 # OpenShift 4.20 Disconnected Mirroring & OSUS Installation Runbook (oc-mirror v2)
 
-==============================================================================
-1. AWS Bastion Configuration (Run from Local Laptop)
-==============================================================================
+AWS Bastion Configuration (Run from Local Laptop)
+
 ```
 # Configure AWS CLI Credentials
 aws configure
@@ -50,7 +49,7 @@ done
 
 
 ==============================================================================
-2. Bastion Filesystem & Workspace Preparation (Run on Bastion)
+Bastion Filesystem & Workspace Preparation (Run on Bastion)
 ==============================================================================
 
 # Expand Filesystem
