@@ -201,6 +201,40 @@ curl -I https://localhost:5001/v2/
 curl -I https://localhost:5002/v2/
 ```
 
+# Configure nexus to start automatically
+```
+# Start Nexus with auto-restart
+# Recreate Nexus container with --replace
+sudo podman run -d --name nexus --replace \
+  --restart=always \
+  -p 8081:8081 \
+  -e INSTALL4J_ADD_VM_PARAMS="-Xms512m -Xmx1024m -XX:MaxDirectMemorySize=512m" \
+  -v /var/nexus-data:/nexus-data:Z \
+  docker.io/sonatype/nexus3:latest
+
+# Recreate Nginx SSL Proxy container with --replace
+sudo podman run -d --name nexus-ssl-proxy --replace \
+  --net=host \
+  --restart=always \
+  -v /etc/nginx/nexus-proxy.conf:/etc/nginx/nginx.conf:ro \
+  -v /etc/nexus-ssl:/etc/nexus-ssl:ro \
+  docker.io/library/nginx:alpine
+
+==============================================================================
+Bastion Resume / Startup Check (If Instance Was Stopped)
+==============================================================================
+
+# 1. Ensure containers are running
+sudo podman start nexus nexus-ssl-proxy 2>/dev/null || true
+
+# 2. Wait for Nexus proxy response
+until [ "$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost:5002/v2/)" != "502" ]; do
+  echo "Waiting for Nexus initialization..."; sleep 5;
+done
+echo "Nexus is online."
+
+```
+
 Install oc-mirror v2 & Mirror Content (Run on Bastion)
 
 ```
@@ -449,32 +483,26 @@ RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
 echo "Found cluster resources at: ${RESOURCE_DIR}"
 ```
 ```
-# 1. Cleanly inject mirrorSourcePolicy: NeverContactSource directly above "source:"
-python3 -c '
-import glob
-
-def apply_never_contact(filepath):
-    with open(filepath, "r") as f:
-        lines = f.readlines()
-    
-    clean = [l for l in lines if "mirrorSourcePolicy" not in l]
-    final = []
-    for line in clean:
-        if line.strip().startswith("source:"):
-            indent = line[:len(line) - len(line.lstrip())]
-            final.append(f"{indent}mirrorSourcePolicy: NeverContactSource\n")
-        final.append(line)
-        
-    with open(filepath, "w") as f:
-        f.writelines(final)
-
-resource_dir="'$RESOURCE_DIR'"
-for f in glob.glob(f"{resource_dir}/idms*.yaml") + glob.glob(f"{resource_dir}/itms*.yaml"):
-    apply_never_contact(f)
-'
+# Clean existing mirrorSourcePolicy entries and inject mirrorSourcePolicy: NeverContactSource before source:
+for f in "${RESOURCE_DIR}"/idms*.yaml "${RESOURCE_DIR}"/itms*.yaml; do
+  [ -f "$f" ] || continue
+  sed -i '/mirrorSourcePolicy:/d' "$f"
+  sed -i 's/^\([[:space:]]*\)source:/\1mirrorSourcePolicy: NeverContactSource\n\1source:/' "$f"
+done
+cat ${RESOURCE_DIR}/itms*.yaml
+cat ${RESOURCE_DIR}/idms*.yaml
 ```
 ```
-# 2. Replace localhost:5002 with BASTION_HOST:5002
+# Shorten the catalog source names (optional)
+```
+RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
+OLD_NAME="cs-redhat-operator-index-v4-20"
+NEW_NAME="my-rh-operators"
+# Update the name in all generated YAML manifests
+sed -i "s/${OLD_NAME}/${NEW_NAME}/g" "${RESOURCE_DIR}"/*.yaml
+```
+
+# Replace localhost:5002 with BASTION_HOST:5002
 BASTION_HOST=$(curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
   || ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' \
   || hostname -I | awk '{print $1}')
@@ -485,41 +513,25 @@ sed -i "s/localhost:5002/${BASTION_HOST}:5002/g" "${RESOURCE_DIR}"/*.yaml
 sed -i "s/localhost:5002/${BASTION_HOST}:5002/g" "${RESOURCE_DIR}"/*.json 2>/dev/null || true
 ```
 ```
-# 3. Multi-Document Safe Sanity Check
-python3 -c '
-import os, glob, yaml, json
+# Multi-Document Safe Sanity Check
+echo "🔍 RUNNING STRICT SANITY CHECK ON MANIFESTS..."
 
-resource_dir = "'$RESOURCE_DIR'"
-print("🔍 RUNNING STRICT SANITY CHECK ON MANIFESTS...\n")
-
-errors = False
-for f in glob.glob(f"{resource_dir}/*.yaml") + glob.glob(f"{resource_dir}/*.json"):
-    fname = os.path.basename(f)
-    try:
-        with open(f) as fp:
-            docs = list(yaml.safe_load_all(fp)) if f.endswith(".yaml") else [json.load(fp)]
-        
-        if any("localhost" in str(doc) for doc in docs if doc):
-            print(f"❌ FAIL: {fname} contains un-replaced localhost endpoint!")
-            errors = True
-        else:
-            print(f"✅ PASS: {fname} ({len(docs)} doc(s))")
-    except Exception as e:
-        print(f"❌ FAIL: {fname} parsing error: {e}")
-        errors = True
-
-if errors:
-    raise SystemExit("🛑 Fix manifest errors before continuing.")
-'
+if grep -rn "localhost:5002" "${RESOURCE_DIR}"/*.yaml "${RESOURCE_DIR}"/*.json 2>/dev/null; then
+  echo "🛑 FAIL: Found un-replaced localhost endpoints in manifests above!"
+  exit 1
+else
+  echo "✅ PASS: All manifests cleanly point to ${BASTION_HOST}:5002"
+fi
 ```
 ```
-# 4. Apply IDMS, ITMS, Signatures
+# Apply IDMS, ITMS, Signatures
+RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
 oc apply -f "${RESOURCE_DIR}/idms-oc-mirror.yaml"
 oc apply -f "${RESOURCE_DIR}/itms-oc-mirror.yaml"
-oc apply -f "${RESOURCE_DIR}"/signature-configmap.*
+oc apply -f "${RESOURCE_DIR}"/signature-configmap.yaml
 ```
 ```
-# 5. BLOCKING WAIT: MachineConfigPool Node Updates
+# BLOCKING WAIT: MachineConfigPool Node Updates
 echo "⏳ Waiting for MachineConfigPools to begin and complete updates..."
 sleep 10
 
@@ -531,18 +543,48 @@ done
 echo "✅ ALL NODES & MACHINECONFIGPOOLS ARE FULLY UPDATED AND READY!"
 ```
 ```
-# 6. Apply CatalogSources & BLOCK for OLM Ready State
-oc apply -f "${RESOURCE_DIR}"/cs-*.yaml
-oc apply -f "${RESOURCE_DIR}"/cc-*.yaml 2>/dev/null || true
+# Apply CatalogSources & BLOCK for OLM Ready State
+RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
+RESOURCE_DIR=$(find "${HOME}" -type d -name "cluster-resources" | head -n 1)
+
+# Apply IDMS & ITMS
+oc apply -f ${RESOURCE_DIR}/idms-oc-mirror.yaml
+oc apply -f ${RESOURCE_DIR}/itms-oc-mirror.yaml
+
+# Apply CatalogSources & ClusterCatalogs (unquoted wildcards for proper expansion)
+oc apply -f ${RESOURCE_DIR}/cs-certified-operator-index-v4-20.yaml
+oc apply -f ${RESOURCE_DIR}/cs-redhat-operator-index-v4-20.yaml
+oc apply -f ${RESOURCE_DIR}/cc-certified-operator-index-v4-20.yaml
+oc apply -f ${RESOURCE_DIR}/cc-redhat-operator-index-v4-20.yaml
+
+# Apply Signature ConfigMap & Update Service explicitly
+oc apply -f ${RESOURCE_DIR}/signature-configmap.yaml
+oc apply -f ${RESOURCE_DIR}/updateService.yaml
 ```
 ```
 echo "⏳ Waiting for CatalogSource to reach READY state..."
-until [ "$(oc get catalogsource cs-redhat-operator-index-v4-20 -n openshift-marketplace -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)" = "READY" ]; do
+# Adjust catalogsource name if you renamed from cs-redhat-operator-index-v4-20 to "my-rh-operators" as described above. I didn't do this in these steps.
+until [ "$(oc get catalogsource  -n openshift-marketplace -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)" = "READY" ]; do
   echo "[$(date +'%H:%M:%S')] CatalogSource status: $(oc get catalogsource cs-redhat-operator-index-v4-20 -n openshift-marketplace -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo 'Pending')"
   sleep 10
 done
 echo "✅ CATALOGSOURCE IS READY AND CONNECTED!"
+oc get catalogsource -n openshift-marketplace
 ```
+
+# Disable Default Catalogs
+## oc patch operatorhub cluster --type=merge -p '{"spec":{"disableAllDefaultSources": true}}'
+cat << EOF > disable-default-catalogsources.yaml
+apiVersion: config.openshift.io/v1
+kind: OperatorHub
+metadata:
+  name: cluster
+spec:
+  disableAllDefaultSources: true
+EOF
+oc apply -f disable-default-catalogsources.yaml
+oc get catalogsource -n openshift-marketplace
+
 
 Install OpenShift Update Service (OSUS) & Patch CVO
 ```
@@ -601,8 +643,16 @@ oc create configmap registry-cas -n openshift-config \
   --from-file="${REGISTRY_KEY}"=/etc/nexus-ssl/nexus.crt \
   --dry-run=client -o yaml | oc apply -f -
 
-oc patch image.config.openshift.io/cluster --type=merge \
-  -p '{"spec":{"additionalTrustedCA":{"name":"registry-cas"}}}'
+cat <<EOF | oc apply -f -
+apiVersion: config.openshift.io/v1
+kind: Image
+metadata:
+  name: cluster
+spec:
+  additionalTrustedCA:
+    name: registry-cas
+EOF
+
 ```
 ```
 # 4. Clean old broken CRs & Apply UpdateService Manifest explicitly to openshift-update-service
