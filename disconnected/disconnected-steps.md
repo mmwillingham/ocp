@@ -828,6 +828,8 @@ metadata:
   name: user-ca-bundle
   namespace: openshift-config
 data:
+  ca-bundle.crt: |
+$(sed 's/^/    /' "${CERT_FILE}")
   updateservice-registry: |
 $(sed 's/^/    /' "${CERT_FILE}")
   ${REGISTRY_KEY}: |
