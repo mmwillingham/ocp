@@ -1039,3 +1039,62 @@ echo "--------------------------------------------------"
 echo "[SUCCESS] Section 11 applied and verified! Refresh your browser to see the updated Software Catalog."
 echo "--------------------------------------------------"
 ```
+
+## Section 12: Miscellaneous
+```
+# ==============================================================================
+# 1. VERSION AUDIT: Compare Upstream Latest vs Local OSUS Mirrored Version
+# ==============================================================================
+echo "--------------------------------------------------"
+echo "Upstream Latest OCP 4.20 : $(curl -sH 'Accept: application/json' 'https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-4.20' | jq -r '.nodes[].version' | sort -V | tail -n 1)"
+echo "Local OSUS Graph Latest  : $(curl -s -k "https://$(oc get route -n openshift-update-service -o jsonpath='{.items[0].spec.host}')/api/upgrades_info/v1/graph?channel=stable-4.20" 2>/dev/null | jq -r '.nodes[].version' 2>/dev/null | sort -V | tail -n 1)"
+echo "--------------------------------------------------"
+
+
+# ==============================================================================
+# 2. CATALOG AUDIT: List All Available Mirrored Operators
+# ==============================================================================
+# Displays every operator package available in your disconnected catalog
+oc get packagemanifests -o custom-columns='PACKAGE:.metadata.name,CATALOG:.status.catalogSource,DEFAULT_CHANNEL:.status.defaultChannel' | grep -E 'my-operators|cs-' | sort
+
+
+# ==============================================================================
+# 3. MIRROR RULES AUDIT: View Active Image Mirrors (IDMS & ITMS)
+# ==============================================================================
+# Shows which public registry paths are currently redirected to your local Nexus host
+oc get idms,itms -o custom-columns='KIND:.kind,NAME:.metadata.name,POLICY:.spec.mirrorSourcePolicy'
+
+
+# ==============================================================================
+# 4. REGISTRY HEALTH: Verify Nexus SSL Cert Expiration & Storage Usage
+# ==============================================================================
+# Check Nexus TLS Certificate expiration date
+echo "[INFO] Nexus SSL Certificate Expiration:"
+openssl x509 -in /etc/nexus-ssl/nexus.crt -noout -enddate
+
+# Check local Nexus host storage space
+echo -e "\n[INFO] Nexus Local Storage Usage:"
+df -h /var/nexus-data
+
+
+# ==============================================================================
+# 5. NODE CONNECTIVITY TEST: Verify Worker Node Can Pull From Bastion Nexus
+# ==============================================================================
+# Runs a quick curl test directly inside a node's host network namespace
+FIRST_NODE=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
+echo "[INFO] Testing registry reachability from node: ${FIRST_NODE}"
+
+oc debug node/"${FIRST_NODE}" -- chroot /host curl -s -kI "https://${REGISTRY_HOST_PORT}/v2/" | grep -E "HTTP/|200"
+
+
+# ==============================================================================
+# 6. QUICK CLUSTER HEALTH SUMMARY: Unhealthy ClusterOperators & MCPs Only
+# ==============================================================================
+# Displays ONLY ClusterOperators or MachineConfigPools that are degraded or updating
+echo "[INFO] Degraded Cluster Operators (if any):"
+oc get co -o custom-columns='NAME:.metadata.name,AVAILABLE:.status.conditions[?(@.type=="Available")].status,PROGRESSING:.status.conditions[?(@.type=="Progressing")].status,DEGRADED:.status.conditions[?(@.type=="Degraded")].status' | grep -v 'True  False  False' || echo "All ClusterOperators Healthy!"
+
+echo -e "\n[INFO] MachineConfigPool Status:"
+oc get mcp -o custom-columns='NAME:.metadata.name,UPDATED:.status.conditions[?(@.type=="Updated")].status,UPDATING:.status.conditions[?(@.type=="Updating")].status,DEGRADED:.status.conditions[?(@.type=="Degraded")].status'
+```
+
