@@ -414,6 +414,7 @@ mkdir -p ~/.open-shift
 jq --arg auth "$NEXUS_AUTH" '.auths["localhost:5002"] = {"auth": $auth}' ~/pull-secret.json > ~/.open-shift/containers-auth.json
 
 # Run Mirroring Process
+## Adding --remove-signatures for the certified operators in this environment.
 oc-mirror --v2 \
   --config "${WORKSPACE}/imageset-config.yaml" \
   docker://localhost:5002 \
